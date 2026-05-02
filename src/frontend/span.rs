@@ -1,19 +1,28 @@
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub offset: usize,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Position {
+    pub fn new() -> Self {
+        Self {
+            offset: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
-    pub start: usize, // byte offset
-    pub end: usize,   // byte offset (exclusive)
+    pub start: Position,
+    pub end: Position,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
+    pub fn new(start: Position, end: Position) -> Self {
         Self { start, end }
-    }
-
-    pub fn len(&self) -> usize {
-        self.end.saturating_sub(self.start)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
