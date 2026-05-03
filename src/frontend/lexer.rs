@@ -16,6 +16,11 @@ pub enum LexerError {
         span: Span,
     },
 
+    #[error("Unterminated comment at {span:?}")]
+    UnterminatedComment {
+        span: Span,
+    },
+
     #[error("Invalid number literal at {span:?}")]
     InvalidNumber {
         span: Span,
@@ -54,6 +59,10 @@ impl<'a> Cursor<'a> {
 impl<'a> Cursor<'a> {
     fn peek(&self) -> Option<char> {
         self.current.map(|(_, ch)| ch)
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        self.next.map(|(_, ch)| ch)
     }
 
     fn position(&self) -> Position {
@@ -117,7 +126,7 @@ impl<'a> Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Result<Token, LexerError> {
-        self.skip_whitespace();
+        self.skip_whitespace()?;
 
         let start = self.cursor.position();
 
@@ -141,8 +150,57 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn skip_whitespace(&mut self) {
-        self.cursor.take_while(|c| c.is_ascii_whitespace());
+    fn skip_whitespace(&mut self) -> Result<(), LexerError> {
+        loop {
+            self.cursor.take_while(|c| c.is_ascii_whitespace());
+
+            if !self.starts_comment() {
+                break;
+            }
+
+            self.skip_comment()?;
+        }
+
+        Ok(())
+    }
+
+    fn starts_comment(&self) -> bool {
+        self.cursor.peek() == Some('(')
+            && self.cursor.peek_next() == Some('*')
+    }
+
+    fn ends_comment(&self) -> bool {
+        self.cursor.peek() == Some('*')
+            && self.cursor.peek_next() == Some(')')
+    }
+
+    fn skip_comment(&mut self) -> Result<(), LexerError> {
+        let start = self.cursor.position();
+        self.cursor.bump();
+        self.cursor.bump();
+        let end = self.cursor.position();
+
+        let mut depth = 1;
+
+        while let Some(c) = self.cursor.peek() {
+            if self.starts_comment() {
+                self.cursor.bump();
+                self.cursor.bump();
+                depth += 1;
+            } else if self.ends_comment() {
+                self.cursor.bump();
+                self.cursor.bump();
+                depth -= 1;
+
+                if depth == 0 {
+                    return Ok(());
+                }
+            } else {
+                self.cursor.bump();
+            }
+        }
+
+        Err(LexerError::UnterminatedComment { span: Span::new(start, end) })
     }
 
     fn lex_digits(&mut self, start: Position) -> Result<Token, LexerError> {
@@ -617,5 +675,66 @@ mod tests {
                 ""
             ]
         );
+    }
+
+    #[test]
+    fn lexes_comments_are_ignored() {
+        let input = r#"
+            MODULE Test;
+            VAR x: INTEGER;
+            BEGIN
+                (*x := 123;*)
+                x := 127;
+            END Test.
+        "#;
+
+        let result = lexemes(input);
+
+        assert_eq!(
+            result,
+            vec![
+                "MODULE", "Test", ";",
+                "VAR", "x", ":", "INTEGER", ";",
+                "BEGIN",
+                "x", ":=", "127", ";",
+                "END", "Test", ".",
+                ""
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_nested_comments_are_ignored() {
+        let input = r#"
+            MODULE Test;
+            VAR x: INTEGER;
+            BEGIN
+                (* (* x := 123; *) *)
+                x := 127;
+            END Test.
+        "#;
+
+        let result = lexemes(input);
+
+        assert_eq!(
+            result,
+            vec![
+                "MODULE", "Test", ";",
+                "VAR", "x", ":", "INTEGER", ";",
+                "BEGIN",
+                "x", ":=", "127", ";",
+                "END", "Test", ".",
+                ""
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unterminated_comment() {
+        let mut lexer = Lexer::new("(* hello)");
+
+        let err = lexer.next_token().unwrap_err();
+
+        assert!(matches!(err, LexerError::UnterminatedComment { .. }));
     }
 }
