@@ -51,7 +51,7 @@ impl<'a> Cursor<'a> {
             chars,
             current,
             next,
-            pos: Position::new(),
+            pos: Position::initial(),
         }
     }
 }
@@ -182,7 +182,7 @@ impl<'a> Lexer<'a> {
 
         let mut depth = 1;
 
-        while let Some(c) = self.cursor.peek() {
+        while let Some(_c) = self.cursor.peek() {
             if self.starts_comment() {
                 self.cursor.bump();
                 self.cursor.bump();
@@ -222,7 +222,7 @@ impl<'a> Lexer<'a> {
                 self.cursor.bump();
 
                 Ok(Token::new(
-                    TokenKind::IntegerNumber,
+                    TokenKind::Number,
                     self.cursor.slice_from(start),
                     Span::new(start, self.cursor.position()),
                 ))
@@ -256,7 +256,7 @@ impl<'a> Lexer<'a> {
                 }
 
                 Ok(Token::new(
-                    TokenKind::IntegerNumber,
+                    TokenKind::Number,
                     self.cursor.slice_from(start),
                     Span::new(start, self.cursor.position()),
                 ))
@@ -287,7 +287,7 @@ impl<'a> Lexer<'a> {
         }
 
         Ok(Token::new(
-            TokenKind::RealNumber,
+            TokenKind::Number,
             self.cursor.slice_from(start),
             Span::new(start, self.cursor.position()),
         ))
@@ -498,7 +498,7 @@ mod tests {
 
         let token = lexer.next_token().unwrap();
 
-        assert_eq!(token.kind, TokenKind::IntegerNumber);
+        assert_eq!(token.kind, TokenKind::Number);
         assert_eq!(token.lexeme, "12345");
     }
 
@@ -508,7 +508,7 @@ mod tests {
 
         let token = lexer.next_token().unwrap();
 
-        assert_eq!(token.kind, TokenKind::IntegerNumber);
+        assert_eq!(token.kind, TokenKind::Number);
         assert_eq!(token.lexeme, "12AFH");
     }
 
@@ -528,7 +528,7 @@ mod tests {
 
         let token = lexer.next_token().unwrap();
 
-        assert_eq!(token.kind, TokenKind::RealNumber);
+        assert_eq!(token.kind, TokenKind::Number);
         assert_eq!(token.lexeme, "123.45");
     }
 
@@ -538,7 +538,7 @@ mod tests {
 
         let token = lexer.next_token().unwrap();
 
-        assert_eq!(token.kind, TokenKind::RealNumber);
+        assert_eq!(token.kind, TokenKind::Number);
         assert_eq!(token.lexeme, "123.45E-6");
     }
 

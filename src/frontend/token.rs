@@ -3,22 +3,28 @@ use crate::frontend::span::{Span};
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Identifier,
-    IntegerNumber,
-    RealNumber,
+    Number,
     String,
     OperatorOrDelimiter,
     Eof,
+    Invalid
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Token<'a> {
+pub struct Token {
     pub kind: TokenKind,
-    pub lexeme: &'a str,
+    pub lexeme: String,
     pub span: Span,
 }
 
-impl<'a> Token<'a> {
+impl Token {
+    pub(crate) fn invalid() -> Token {
+        Token { kind: TokenKind::Invalid, lexeme: "".to_string(), span: Span::default() }
+    }
+}
+
+impl Token {
     pub(crate) fn new(kind: TokenKind, lexeme: &str, span: Span) -> Token {
-        Token { kind, lexeme, span }
+        Token { kind, lexeme: lexeme.to_string(), span }
     }
 }
