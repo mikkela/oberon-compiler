@@ -1,8 +1,9 @@
-use crate::frontend::ast::{ConstDeclaration, Declarations, Expression, Identifier, IdentifierDef, Module, StatementSequence};
+use std::collections::VecDeque;
+use crate::frontend::ast::{BinaryOperation, ConstDeclaration, Declarations, Designator, Element, Expression, Identifier, IdentifierDef, Module, QualifiedIdentifier, Selector, StatementSequence, UnaryOperation};
 use crate::frontend::lexer::{Lexer, LexerError};
-use thiserror::Error;
-use crate::frontend::span::Span;
+use crate::frontend::span::{Span, Spanned};
 use crate::frontend::token::{Token, TokenKind};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ParserError {
@@ -25,13 +26,15 @@ pub enum ParserError {
 pub struct TokenStream<'a> {
     lexer: Lexer<'a>,
     current: Token,
+    lookahead: VecDeque<Token>,
 }
 
 impl<'a> TokenStream<'a> {
-    pub fn new(mut lexer: Lexer<'a>) -> Self {
+    pub fn new(lexer: Lexer<'a>) -> Self {
         Self {
             lexer,
             current: Token::invalid(),
+            lookahead: VecDeque::new(),
         }
     }
 
@@ -39,8 +42,23 @@ impl<'a> TokenStream<'a> {
         &self.current
     }
 
+    pub fn peek_n(&mut self, n: usize) -> Vec<&Token> {
+        while self.lookahead.len() < n {
+            match self.lexer.next_token() {
+                Ok(token) => self.lookahead.push_back(token),
+                Err(_) => break,
+            }
+        }
+
+        self.lookahead.iter().take(n).collect()
+    }
+
     pub fn advance(&mut self) -> Result<(), ParserError> {
-        self.current = self.lexer.next_token()?;
+        if let Some(next) = self.lookahead.pop_front() {
+            self.current = next;
+        } else {
+            self.current = self.lexer.next_token()?;
+        }
         Ok(())
     }
 }
@@ -56,17 +74,46 @@ impl<'a> Parser<'a> {
 }
 
 macro_rules! pred {
+    (AMPERSAND) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "&" };
     (ASSIGN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "=" };
     (BEGIN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "BEGIN" };
+    (CARET) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "^" };
+    (COMMA) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "," };
     (CONST) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "CONST" };
+    (DIV) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "DIV" };
     (DOT) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "." };
+    (DOTDOT) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ".." };
     (END) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "END" };
+    (EQUAL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "=" };
+    (FALSE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "FALSE" };
+    (GREATER) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ">" };
+    (GREATEREQUAL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ">=" };
     (IDENT) => { |token: &Token| token.kind == TokenKind::Identifier };
+    (IN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "IN" };
+    (IS) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "IS" };
+    (LBRACKET) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "[" };
+    (LCURLY) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "{" };
+    (LESS) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "<" };
+    (LESSEQUAL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "<=" };
+    (LPAREN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "(" };
+    (MINUS) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "-" };
+    (MOD) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "MOD" };
     (MODULE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "MODULE" };
+    (NIL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "NIL" };
+    (NONEQUAL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "#" };
     (NUMBER) => { |token: &Token| token.kind == TokenKind::Number };
+    (OR) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "OR" };
+    (PLUS) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "+" };
     (PROCEDURE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "PROCEDURE" };
+    (RBRACKET) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "]" };
+    (RCURLY) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "}" };
+    (RPAREN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ")" };
     (SEMICOLON) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ";" };
+    (SLASH) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "/" };
+    (STAR) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "*" };
     (STRING) => { |token: &Token| token.kind == TokenKind::String };
+    (TILDE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "~" };
+    (TRUE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "TRUE" };
     (TYPE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "TYPE" };
     (VAR) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "VAR" };
 }
@@ -122,16 +169,102 @@ impl<'a> Parser<'a> {
         Ok(ConstDeclaration { ident, value })
     }
 
+    fn parse_expression_list(&mut self) -> Result<Vec<Expression>, ParserError> {
+        let mut result = vec![self.parse_expression()?];
+        while self.eat(pred!(COMMA))?.is_some() {
+            result.push(self.parse_expression()?);
+        }
+        Ok(result)
+    }
+
+    fn parse_binary_operator(token: Token) -> BinaryOperation {
+        match token.lexeme.as_str() {
+            "=" => BinaryOperation::Eq,
+            "#" => BinaryOperation::Neq,
+            "<" => BinaryOperation::Lt,
+            "<=" => BinaryOperation::Le,
+            ">" => BinaryOperation::Gt,
+            ">=" => BinaryOperation::Ge,
+            "*" => BinaryOperation::Multiplication,
+            "/" => BinaryOperation::Division,
+            "+" => BinaryOperation::Addition,
+            "-" => BinaryOperation::Subtraction,
+            "MOD" => BinaryOperation::Mod,
+            "DIV" => BinaryOperation::Div,
+            "&" => BinaryOperation::And,
+            "OR" => BinaryOperation::Or,
+            "IN" => BinaryOperation::In,
+            "IS" => BinaryOperation::Is,
+            _ => panic!("Invalid binary operator: {}", token.lexeme),
+        }
+    }
+
     fn parse_expression(&mut self) -> Result<Expression, ParserError> {
-        self.parse_simple_expression()
+        let simple_expression = self.parse_simple_expression()?;
+        if let Some(token) = self.eat(|t| pred!(EQUAL)(t)
+            || pred!(NONEQUAL)(t)
+            || pred!(LESS)(t)
+            || pred!(LESSEQUAL)(t)
+            || pred!(GREATER)(t)
+            || pred!(GREATEREQUAL)(t)
+            || pred!(IN)(t)
+            || pred!(IS)(t)
+        )? {
+            let rhs = self.parse_simple_expression()?;
+            let span = Span::new(simple_expression.span().start, rhs.span().end);
+            Ok(Expression::Binary {
+                op: Self::parse_binary_operator(token),
+                lhs: Box::new(simple_expression), rhs: Box::new(rhs), span })
+        }
+        else {
+            Ok(simple_expression)
+        }
+
     }
 
     fn parse_simple_expression(&mut self) -> Result<Expression, ParserError> {
-        self.parse_term()
+        let sign_token = self.eat(|t| pred!(PLUS)(t) || pred!(MINUS)(t))?;
+
+        let mut expr = self.parse_term()?;
+
+        if let Some(token) = sign_token {
+            let span = Span::new(token.span.start, expr.span().end);
+            let op = if pred!(PLUS)(&token) { UnaryOperation::Plus } else { UnaryOperation::Minus };
+            expr = Expression::Unary { op, operand: Box::new(expr), span };
+        }
+
+        if let Some(token) = self.eat(|t| pred!(PLUS)(t) || pred!(MINUS)(t) || pred!(OR)(t))? {
+            let rhs = self.parse_term()?;
+            let span = Span::new(expr.span().start, rhs.span().end);
+
+            expr = Expression::Binary {
+                op: Self::parse_binary_operator(token),
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+                span,
+            };
+        }
+
+        Ok(expr)
     }
 
     fn parse_term(&mut self) -> Result<Expression, ParserError> {
-        self.parse_factor()
+        let factor = self.parse_factor()?;
+        if let Some(token) = self.eat(|t| pred!(STAR)(t)
+            || pred!(SLASH)(t)
+            || pred!(MOD)(t)
+            || pred!(DIV)(t)
+            || pred!(AMPERSAND)(t)
+        )? {
+            let rhs = self.parse_factor()?;
+            let span = Span::new(factor.span().start, rhs.span().end);
+            Ok(Expression::Binary {
+                op: Self::parse_binary_operator(token),
+                lhs: Box::new(factor), rhs: Box::new(rhs), span })
+        }
+        else {
+            Ok(factor)
+        }
     }
 
     fn parse_factor(&mut self) -> Result<Expression, ParserError> {
@@ -140,6 +273,39 @@ impl<'a> Parser<'a> {
         }
         else if self.peek(pred!(STRING)).is_some() {
             self.parse_string()
+        }
+        else if let Some(token) = self.eat(pred!(NIL))? {
+            Ok(Expression::Nil { span: token.span })
+        }
+        else if let Some(token) = self.eat(pred!(TRUE))? {
+            Ok(Expression::True { span: token.span })
+        }
+        else if let Some(token) = self.eat(pred!(FALSE))? {
+            Ok(Expression::False { span: token.span })
+        }
+        else if self.peek(pred!(LCURLY)).is_some() {
+            self.parse_set()
+        }
+        else if let Some(start) = self.peek(pred!(IDENT)) {
+            let designator = self.parse_designator()?;
+            let actual_parameters =
+                if self.peek(pred!(LPAREN)).is_some() {
+                    Some(self.parse_actual_parameters()?)
+                } else {
+                    None
+                };
+
+            let end = self.token_stream.current();
+            Ok(Expression::Designator { designator, actual_parameters, span: Span::new(start.span.start, end.span.end) })
+        }
+        else if self.eat(pred!(LPAREN))?.is_some() {
+            let expr = self.parse_expression()?;
+            self.expect(pred!(RPAREN))?;
+            Ok(expr)
+        }
+        else if let Some(token) = self.eat(pred!(TILDE))? {
+            let operand = self.parse_factor()?;
+            Ok(Expression::Unary { op: UnaryOperation::Not, operand: Box::new(operand), span: token.span })
         }
         else {
             Err(ParserError::UnexpectedToken { token: self.token_stream.current().clone() })
@@ -171,6 +337,101 @@ impl<'a> Parser<'a> {
                 span: token.span })
         }
 
+    }
+
+    fn parse_set(&mut self) -> Result<Expression, ParserError> {
+        let start =self.expect(pred!(LCURLY))?;
+        let mut elements = vec![];
+        while self.peek(pred!(RCURLY)).is_none() {
+            if !elements.is_empty() {
+                self.expect(pred!(COMMA))?;
+            }
+            elements.push(self.parse_element()?);
+        }
+        let end = self.expect(pred!(RCURLY))?;
+        Ok(Expression::Set { elements, span: Span::new(start.span.start, end.span.end) })
+    }
+
+    fn parse_element(&mut self) -> Result<Element, ParserError> {
+        let first = self.parse_expression()?;
+        if self.eat(pred!(DOTDOT))?.is_some() {
+            let second = self.parse_expression()?;
+            let span = Span::new(first.span().start, second.span().end);
+            Ok(Element { first, second: Some(second), span })
+        } else {
+            let span = first.span();
+            Ok(Element { first, second: None, span })
+        }
+    }
+
+    fn parse_designator(&mut self) -> Result<Designator, ParserError> {
+        let start = self.token_stream.current().span;
+        let head = self.parse_qualident()?;
+        let selectors = self.parse_selectors()?;
+        let end = self.token_stream.current().span;
+        Ok(Designator{ head, selectors, span: Span::new(start.start, end.end)})
+    }
+
+    fn parse_qualident(&mut self) -> Result<QualifiedIdentifier, ParserError> {
+        let mut parts = vec![self.parse_ident()?];
+        if self.eat(pred!(DOT))?.is_some() {
+            parts.push(self.parse_ident()?);
+        }
+        Ok(QualifiedIdentifier{ parts })
+    }
+
+    fn parse_selectors(&mut self) -> Result<Vec<Selector>, ParserError> {
+        let mut result = vec![];
+        while self.peek(|t| pred!(DOT)(t)
+            || pred!(LBRACKET)(t)
+            || pred!(CARET)(t)
+        ).is_some() || self.type_guard_selector() {
+            result.push(self.parse_selector()?);
+        }
+        Ok(result)
+    }
+
+    fn type_guard_selector(&mut self) -> bool {
+        if !pred!(LPAREN)(self.token_stream.current()) {
+            return false;
+        }
+        match self.token_stream.peek_n(4).as_slice() {
+            [t0, t1, ..] if pred!(IDENT)(t0) && pred!(RPAREN)(t1) => true,
+
+            [t0, t1, t2, t3]
+            if pred!(IDENT)(t0) && pred!(DOT)(t1) && pred!(IDENT)(t2) && pred!(RPAREN)(t3) => true,
+
+            _ => false,
+        }
+    }
+
+    fn parse_selector(&mut self) -> Result<Selector, ParserError> {
+        if self.eat(pred!(DOT))?.is_some() {
+            Ok(Selector::Field(self.parse_ident()?))
+        } else if let Some(start) =self.eat(pred!(LBRACKET))? {
+            let index = self.parse_expression_list()?;
+            let end = self.expect(pred!(RBRACKET))?;
+            Ok(Selector::Index(index, Span::new(start.span.start, end.span.end)))
+        } else if let Some(token) =self.eat(pred!(CARET))? {
+            Ok(Selector::Deref(token.span))
+        } else if let Some(start) =self.eat(pred!(LPAREN))? {
+            let guard = self.parse_qualident()?;
+            let end =self.expect(pred!(RPAREN))?;
+            Ok(Selector::TypeGuard(guard, Span::new(start.span.start, end.span.end)))
+        }
+        else {
+            Err(ParserError::UnexpectedToken { token: self.token_stream.current().clone() })
+        }
+    }
+
+    fn parse_actual_parameters(&mut self) -> Result<Vec<Expression>, ParserError> {
+        self.expect(pred!(LPAREN))?;
+        if self.eat(pred!(RPAREN))?.is_some() {
+            return Ok(vec![]);
+        }
+        let result = self.parse_expression_list()?;
+        self.expect(pred!(RPAREN))?;
+        Ok(result)
     }
 
     fn parse_identdef(&mut self) -> Result<IdentifierDef, ParserError> {
@@ -233,11 +494,7 @@ mod tests {
     use crate::frontend::ast::Module;
     use crate::frontend::lexer::Lexer;
     use crate::frontend::parser::Parser;
-    use crate::frontend::span::{Position, Span};
-    use crate::frontend::token::TokenKind;
 
-
-    use crate::frontend::token::Token;
 
     // ---------- parse ----------
     pub fn parse(module: &str) -> Module {
@@ -246,8 +503,8 @@ mod tests {
     }
 
     mod expressions {
-        use crate::frontend::ast::{ConstDeclaration, Expression};
         use super::*;
+        use crate::frontend::ast::{BinaryOperation, ConstDeclaration, Expression, Selector, UnaryOperation};
 
         #[test]
         fn parse_integer_const() {
@@ -297,6 +554,502 @@ mod tests {
             let ConstDeclaration { value, .. } = &decls.const_declarations[0];
             let Expression::String { value, .. } = value else { panic!("character"); };
             assert_eq!(value, " ");
+        }
+
+        #[test]
+        fn parse_nil() {
+            let module = parse("MODULE m; CONST foo=NIL; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Nil {  .. } = value else { panic!("NIL"); };
+        }
+
+        #[test]
+        fn parse_true() {
+            let module = parse("MODULE m; CONST foo=TRUE; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::True {  .. } = value else { panic!("TRUE"); };
+        }
+
+        #[test]
+        fn parse_false() {
+            let module = parse("MODULE m; CONST foo=FALSE; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::False {  .. } = value else { panic!("FALSE"); };
+        }
+
+        #[test]
+        fn parse_empty_set() {
+            let module = parse("MODULE m; CONST foo={}; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Set { elements, .. } = value else { panic!("Empty Set"); };
+            assert_eq!(elements.len(), 0);
+        }
+
+        #[test]
+        fn parse_single_element_set() {
+            let module = parse("MODULE m; CONST foo={TRUE}; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Set { elements, .. } = value else { panic!("Single Element Set"); };
+            assert_eq!(elements.len(), 1);
+        }
+
+        #[test]
+        fn parse_multiple_elements_set() {
+            let module = parse("MODULE m; CONST foo={TRUE, FALSE}; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Set { elements, .. } = value else { panic!("Single Element Set"); };
+            assert_eq!(elements.len(), 2);
+        }
+
+        #[test]
+        fn parse_spanned_element_set() {
+            let module = parse("MODULE m; CONST foo={ 1 .. 5 }; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Set { elements, .. } = value else { panic!("Single Element Set"); };
+            assert_eq!(elements.len(), 1);
+        }
+
+        #[test]
+        fn parse_simple_designator() {
+            let module = parse("MODULE m; CONST foo=bar; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Simple Designator"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 0);
+        }
+
+        #[test]
+        fn parse_compound_designator() {
+            let module = parse("MODULE m; CONST foo=bar.baz; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Compound Designator"); };
+            assert_eq!(designator.head.parts.len(), 2);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.head.parts[1].text, "baz");
+            assert_eq!(designator.selectors.len(), 0);
+        }
+
+        #[test]
+        fn parse_compound_designator_with_field_selector() {
+            let module = parse("MODULE m; CONST foo=bar.baz.fez; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Compound Designator with field selector"); };
+            assert_eq!(designator.head.parts.len(), 2);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.head.parts[1].text, "baz");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::Field (field) = selector else { panic!("Compound Designator with field selector and field"); };
+            assert_eq!(field.text, "fez");
+            assert_eq!(designator.head.parts.len(), 2);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.head.parts[1].text, "baz");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::Field (field) = selector else { panic!("Compound Designator with field selector and field"); };
+            assert_eq!(field.text, "fez");
+        }
+
+        #[test]
+        fn parse_simple_designator_with_single_index() {
+            let module = parse("MODULE m; CONST foo=bar[1]; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Simple Designator with single index"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::Index (index, _) = selector else { panic!("Simple Designator with single index expression"); };
+            assert_eq!(index.len(), 1);
+            let value = &index[0];
+            let Expression::Int { value: 1, .. } = value else { panic!("Simple Designator with single index expression value"); };
+        }
+
+        #[test]
+        fn parse_simple_designator_with_multiple_indeces() {
+            let module = parse("MODULE m; CONST foo=bar[1, 2, 3]; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Simple Designator with single index"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::Index (index, _) = selector else { panic!("Simple Designator with single index expression"); };
+            assert_eq!(index.len(), 3);
+            let mut value = &index[0];
+            let Expression::Int { value: 1, .. } = value else { panic!("Simple Designator with single index expression value 1"); };
+            value = &index[1];
+            let Expression::Int { value: 2, .. } = value else { panic!("Simple Designator with single index expression value 2"); };
+            value = &index[2];
+            let Expression::Int { value: 3, .. } = value else { panic!("Simple Designator with single index expression value 3"); };
+        }
+
+        #[test]
+        fn parse_simple_designator_with_caret_selector() {
+            let module = parse("MODULE m; CONST foo=bar^; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Designator with caret selector"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::Deref (..) = selector else { panic!("Designator with caret selector and selector"); };
+        }
+
+        #[test]
+        fn parse_simple_designator_with_simple_type_guard_selector() {
+            let module = parse("MODULE m; CONST foo=bar(baz); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Designator with simple type guard selector"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::TypeGuard (type_guard, ..) = selector else { panic!("Designator with simple type guard selector and selector"); };
+            assert_eq!(type_guard.parts.len(), 1);
+            assert_eq!(type_guard.parts[0].text, "baz");
+        }
+
+        #[test]
+        fn parse_simple_designator_with_compound_type_guard_selector() {
+            let module = parse("MODULE m; CONST foo=bar(baz.fez); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, ..} = value else { panic!("Designator with compound type guard selector"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::TypeGuard (type_guard, ..) = selector else { panic!("Designator with compound type guard selector and selector"); };
+            assert_eq!(type_guard.parts.len(), 2);
+            assert_eq!(type_guard.parts[0].text, "baz");
+            assert_eq!(type_guard.parts[1].text, "fez");
+        }
+
+        #[test]
+        fn parse_simple_designator_with_empty_argumentsl() {
+            let module = parse("MODULE m; CONST foo=bar(); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, actual_parameters, ..} = value else { panic!("Simple designator with empty arguments"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 0);
+            assert_eq!(actual_parameters.is_some(), true);
+            let parameters = actual_parameters.clone().unwrap();
+            assert_eq!(parameters.len(), 0);
+        }
+
+        #[test]
+        fn parse_simple_designator_with_argumentsl() {
+            let module = parse("MODULE m; CONST foo=bar(FALSE, TRUE); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, actual_parameters, ..} = value else { panic!("Simple designator with arguments"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 0);
+            assert_eq!(actual_parameters.is_some(), true);
+            let parameters = actual_parameters.clone().unwrap();
+            assert_eq!(parameters.len(), 2);
+            let mut value = &parameters[0];
+            let Expression::False {  .. } = value else { panic!("FALSE"); };
+            value = &parameters[1];
+            let Expression::True {  .. } = value else { panic!("TRUE"); };
+        }
+
+        #[test]
+        fn parse_compound_designator_with_empty_argumentsl() {
+            let module = parse("MODULE m; CONST foo=bar.baz(); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, actual_parameters, ..} = value else { panic!("Compound designator with empty arguments"); };
+            assert_eq!(designator.head.parts.len(), 2);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.head.parts[1].text, "baz");
+            assert_eq!(designator.selectors.len(), 0);
+            assert_eq!(actual_parameters.is_some(), true);
+            let parameters = actual_parameters.clone().unwrap();
+            assert_eq!(parameters.len(), 0);
+        }
+
+        #[test]
+        fn parse_simple_designator_with_typeguard_and_empty_argumentsl() {
+            let module = parse("MODULE m; CONST foo=bar(baz)(); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, actual_parameters, ..} = value else { panic!("Compound designator with empty arguments"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::TypeGuard (type_guard, ..) = selector else { panic!("Designator with simple type guard selector and selector"); };
+            assert_eq!(type_guard.parts.len(), 1);
+            assert_eq!(type_guard.parts[0].text, "baz");
+            assert_eq!(actual_parameters.is_some(), true);
+            let parameters = actual_parameters.clone().unwrap();
+            assert_eq!(parameters.len(), 0);
+        }
+
+        #[test]
+        fn parse_simple_designator_with_multiple_typeguards() {
+            let module = parse("MODULE m; CONST foo=bar(baz)(fez); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, actual_parameters, ..} = value else { panic!("Compound designator with empty arguments"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 2);
+            let selector = &designator.selectors[1];
+            let Selector::TypeGuard (type_guard, ..) = selector else { panic!("Designator with simple type guard selector and selector"); };
+            assert_eq!(type_guard.parts.len(), 1);
+            assert_eq!(type_guard.parts[0].text, "fez");
+            assert_eq!(actual_parameters.is_some(), false);
+        }
+
+        #[test]
+        fn parse_simple_designator_with_type_guard_and_arguments() {
+            let module = parse("MODULE m; CONST foo=bar(baz)(fez, 2); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Designator { designator, actual_parameters, ..} = value else { panic!("Compound designator with empty arguments"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "bar");
+            assert_eq!(designator.selectors.len(), 1);
+            let selector = &designator.selectors[0];
+            let Selector::TypeGuard (type_guard, ..) = selector else { panic!("Designator with simple type guard selector and selector"); };
+            assert_eq!(type_guard.parts.len(), 1);
+            assert_eq!(type_guard.parts[0].text, "baz");
+            assert_eq!(actual_parameters.is_some(), true);
+            let parameters = actual_parameters.clone().unwrap();
+            assert_eq!(parameters.len(), 2);
+            let mut value = &parameters[0];
+            let Expression::Designator { designator, .. } = value else { panic!("Designator"); };
+            assert_eq!(designator.head.parts.len(), 1);
+            assert_eq!(designator.head.parts[0].text, "fez");
+            value = &parameters[1];
+            let Expression::Int { value: 2, .. } = value else { panic!("TRUE"); };
+        }
+
+        #[test]
+        fn parse_parenthesis() {
+            let module = parse("MODULE m; CONST foo=(FALSE); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::False {  .. } = value else { panic!("FALSE"); };
+        }
+
+        #[test]
+        fn parse_tilde() {
+            let module = parse("MODULE m; CONST foo=~FALSE; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Unary { op: UnaryOperation::Not, operand,  .. } = value else { panic!("TILDE"); };
+            let Expression::False {  .. } = &**operand else { panic!("TILDE"); };
+        }
+
+        #[test]
+        fn parse_plus() {
+            let module = parse("MODULE m; CONST foo=+2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Unary { op: UnaryOperation::Plus, operand,  .. } = value else { panic!("TILDE"); };
+            let Expression::Int { value: 2,  .. } = &**operand else { panic!("PLUS"); };
+        }
+
+        #[test]
+        fn parse_minus() {
+            let module = parse("MODULE m; CONST foo= -2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Unary { op: UnaryOperation::Minus, operand,  .. } = value else { panic!("TILDE"); };
+            let Expression::Int { value: 2,  .. } = &**operand else { panic!("MINUS"); };
+        }
+
+        #[test]
+        fn parse_multiplication() {
+            let module = parse("MODULE m; CONST foo=1*2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Multiplication, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_division() {
+            let module = parse("MODULE m; CONST foo=1/2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Division, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+        #[test]
+        fn parse_addition() {
+            let module = parse("MODULE m; CONST foo=1+2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Addition, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_subtraction() {
+            let module = parse("MODULE m; CONST foo=1-2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Subtraction, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_and() {
+            let module = parse("MODULE m; CONST foo=1 & 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::And, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_or() {
+            let module = parse("MODULE m; CONST foo=1 OR 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Or, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_div() {
+            let module = parse("MODULE m; CONST foo=1 DIV 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Div, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_mod() {
+            let module = parse("MODULE m; CONST foo=1 MOD 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Mod, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_combined_sign_and_addition() {
+            let module = parse("MODULE m; CONST foo=+1 + (-2); END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Addition, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Unary { op: UnaryOperation::Plus, operand,  .. } = &**lhs else { panic!("+1"); };
+            let Expression::Int { value: 1,  .. } = &**operand else { panic!("1"); };
+            let Expression::Unary { op: UnaryOperation::Minus, operand,  .. } = &**rhs else { panic!("-2"); };
+            let Expression::Int { value: 2,  .. } = &**operand else { panic!("-2"); };
+        }
+
+        #[test]
+        fn parse_equal() {
+            let module = parse("MODULE m; CONST foo=1 = 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Eq, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_not_equal() {
+            let module = parse("MODULE m; CONST foo=1 # 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Neq, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_less_than() {
+            let module = parse("MODULE m; CONST foo=1 < 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Lt, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_less_than_equal() {
+            let module = parse("MODULE m; CONST foo=1 <= 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Le, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_greater_than() {
+            let module = parse("MODULE m; CONST foo=1 > 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Gt, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_greater_than_equal() {
+            let module = parse("MODULE m; CONST foo=1 >= 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Ge, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_in_equal() {
+            let module = parse("MODULE m; CONST foo=1 IN 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::In, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+
+        #[test]
+        fn parse_is_equal() {
+            let module = parse("MODULE m; CONST foo=1 IS 2; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { value, .. } = &decls.const_declarations[0];
+            let Expression::Binary { op: BinaryOperation::Is, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
+            let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
+            let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
         }
     }
 }

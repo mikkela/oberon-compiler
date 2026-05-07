@@ -1,4 +1,4 @@
-use crate::frontend::span::{Position, Span, Spanned};
+use crate::frontend::span::{Span, Spanned};
 
 // --------------------------- MODULES ---------------------------
 #[derive(Clone, Debug, PartialEq)]
@@ -30,10 +30,27 @@ impl Spanned for ConstDeclaration {
 
 // --------------------------- EXPRESSIONS ---------------------------
 #[derive(Clone, Debug, PartialEq)]
+pub struct Element {
+    pub first: Expression,
+    pub second: Option<Expression>,
+    pub span: Span,
+}
+impl Spanned for Element {
+    fn span(&self) -> Span { self.span }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expression {
     Int { value: i64, span: Span },
     Real   { value: f64, span: Span },
     String { value: String, span: Span },
+    Nil    { span: Span },
+    False    { span: Span },
+    True    { span: Span },
+    Set { elements: Vec<Element>, span: Span },
+    Designator { designator: Designator, actual_parameters: Option<Vec<Expression>>, span: Span },
+    Unary { op: UnaryOperation, operand: Box<Expression>, span: Span },
+    Binary { op: BinaryOperation, lhs: Box<Expression>, rhs: Box<Expression>, span: Span },
 }
 
 impl Spanned for Expression {
@@ -42,8 +59,26 @@ impl Spanned for Expression {
             Expression::Int { span, .. } => *span,
             Expression::Real { span, .. } => *span,
             Expression::String { span, .. } => *span,
+            Expression::Nil { span, .. } => *span,
+            Expression::True { span, .. } => *span,
+            Expression::False { span, .. } => *span,
+            Expression::Set { span, .. } => *span,
+            Expression::Designator { span, .. } => *span,
+            Expression::Unary { span, .. } => *span,
+            Expression::Binary { span, .. } => *span,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum UnaryOperation {
+    Not, Plus, Minus
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BinaryOperation {
+    Addition, Subtraction, Multiplication, Division, Mod, Div, And, Or,
+    Eq, Neq, Lt, Le, Gt, Ge, In, Is
 }
 
 // --------------------------- STATEMENTS ---------------------------
@@ -70,11 +105,11 @@ impl Spanned for StatementSequence {
     fn span(&self) -> Span { self.span }
 }
 
-// --------------------------- DECLARATIONS ---------------------------
+// --------------------------- DESIGNATORS, SELECTORS, IDENTIFIERS ---------------------------
 #[derive(Clone, Debug, PartialEq)]
 pub struct Designator {
     pub head: QualifiedIdentifier,
-    pub selectors: Vec<Selector>, // 0..n
+    pub selectors: Vec<Selector>,
     pub span: Span,
 }
 
@@ -85,9 +120,9 @@ impl Spanned for Designator {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Selector {
     Field(Identifier),          // .x
-    Index(Vec<Expression>),     // [e1, e2]
+    Index(Vec<Expression>, Span),     // [e1, e2]
     Deref(Span),                // ^
-    Call(Vec<Expression>, Span), // (args)
+
     TypeGuard(QualifiedIdentifier, Span), // (ident)
 }
 
@@ -95,14 +130,8 @@ impl Spanned for Selector {
     fn span(&self) -> Span {
         match self {
             Selector::Field(id) => id.span(),
-            Selector::Index(exprs) => {
-                // you might want to store explicit span; this is “best effort”
-                let start = exprs.first().map(|e| e.span().start).unwrap_or(Position::initial());
-                let end   = exprs.last().map(|e| e.span().end).unwrap_or(Position::initial());
-                Span::new(start, end)
-            }
+            Selector::Index(_, span) => *span,
             Selector::Deref(span) => *span,
-            Selector::Call(_, span) => *span,
             Selector::TypeGuard(_, span) => *span,
         }
     }
