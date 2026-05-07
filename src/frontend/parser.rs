@@ -1,8 +1,8 @@
-use std::collections::VecDeque;
-use crate::frontend::ast::{BinaryOperation, ConstDeclaration, Declarations, Designator, Element, Expression, Identifier, IdentifierDef, Module, QualifiedIdentifier, Selector, StatementSequence, UnaryOperation};
+use crate::frontend::ast::{BinaryOperation, ConstDeclaration, Declarations, Designator, Element, Expression, FPSection, FieldList, FormalParameters, FormalType, Identifier, IdentifierDef, Module, QualifiedIdentifier, Selector, StatementSequence, Type, TypeDeclaration, UnaryOperation};
 use crate::frontend::lexer::{Lexer, LexerError};
 use crate::frontend::span::{Span, Spanned};
 use crate::frontend::token::{Token, TokenKind};
+use std::collections::VecDeque;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -75,9 +75,11 @@ impl<'a> Parser<'a> {
 
 macro_rules! pred {
     (AMPERSAND) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "&" };
+    (ARRAY) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "ARRAY" };
     (ASSIGN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "=" };
     (BEGIN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "BEGIN" };
     (CARET) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "^" };
+    (COLON) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ":" };
     (COMMA) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "," };
     (CONST) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "CONST" };
     (DIV) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "DIV" };
@@ -102,17 +104,21 @@ macro_rules! pred {
     (NIL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "NIL" };
     (NONEQUAL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "#" };
     (NUMBER) => { |token: &Token| token.kind == TokenKind::Number };
+    (OF) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "OF" };
     (OR) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "OR" };
     (PLUS) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "+" };
+    (POINTER) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "POINTER" };
     (PROCEDURE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "PROCEDURE" };
     (RBRACKET) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "]" };
     (RCURLY) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "}" };
+    (RECORD) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "RECORD" };
     (RPAREN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ")" };
     (SEMICOLON) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ";" };
     (SLASH) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "/" };
     (STAR) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "*" };
     (STRING) => { |token: &Token| token.kind == TokenKind::String };
     (TILDE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "~" };
+    (TO) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "TO" };
     (TRUE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "TRUE" };
     (TYPE) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "TYPE" };
     (VAR) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "VAR" };
@@ -146,7 +152,11 @@ impl<'a> Parser<'a> {
         if self.eat(pred!(CONST))?.is_some() {
             const_declarations = self.parse_const_declarations()?;
         }
-        Ok(Declarations { const_declarations })
+        let mut type_declarations = vec![];
+        if self.eat(pred!(TYPE))?.is_some() {
+            type_declarations = self.parse_type_declarations()?;
+        }
+        Ok(Declarations { const_declarations, type_declarations })
     }
 
     fn parse_const_declarations(&mut self) -> Result<Vec<ConstDeclaration>, ParserError> {
@@ -167,6 +177,26 @@ impl<'a> Parser<'a> {
         let value = self.parse_expression()?;
 
         Ok(ConstDeclaration { ident, value })
+    }
+
+    fn parse_type_declarations(&mut self) -> Result<Vec<TypeDeclaration>, ParserError> {
+        let mut result = vec![];
+        while self.peek(|t| {
+            pred!(VAR)(t) || pred!(PROCEDURE)(t) || pred!(BEGIN)(t) || pred!(END)(t)
+        }).is_none() {
+            result.push(self.parse_type_declaration()?);
+            self.expect(pred!(SEMICOLON))?;
+        }
+
+        Ok(result)
+    }
+
+    fn parse_type_declaration(&mut self) -> Result<TypeDeclaration, ParserError> {
+        let ident = self.parse_identdef()?;
+        self.expect(pred!(ASSIGN))?;
+        let ty = self.parse_type()?;
+
+        Ok(TypeDeclaration { ident, ty })
     }
 
     fn parse_expression_list(&mut self) -> Result<Vec<Expression>, ParserError> {
@@ -364,6 +394,122 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_type(&mut self) -> Result<Type, ParserError> {
+        if self.peek(pred!(IDENT)).is_some() {
+            Ok(Type::Named { name: self.parse_qualident()? })
+        } else if let Some(start) = self.eat(pred!(ARRAY))? {
+            let lengths = self.parse_lengths()?;
+            self.expect(pred!(OF))?;
+            let element = Box::new(self.parse_type()?);
+            let span = Span::new(start.span.start, self.token_stream.current().span.end);
+            Ok(Type::Array { lengths, element, span })
+        } else if let Some(start) = self.eat(pred!(RECORD))? {
+            let base = self.parse_base_type()?;
+            let field_lists = self.parse_field_lists()?;
+            self.expect(pred!(END))?;
+            let span = Span::new(start.span.start, self.token_stream.current().span.end);
+            Ok(Type::Record { base, field_lists, span })
+        } else if let Some(start) = self.eat(pred!(POINTER))? {
+            self.expect(pred!(TO))?;
+            let pointee = self.parse_type()?;
+            let span = Span::new(start.span.start, pointee.span().end);
+            Ok(Type::Pointer { pointee: Box::new(pointee), span })
+        } else if let Some(start) = self.eat(pred!(PROCEDURE))? {
+            let params = self.parse_formal_parameters()?;
+            let span = Span::new(start.span.start, self.token_stream.current().span.end);
+            Ok(Type::Procedure { params , span })
+        }
+        else {
+            Err(ParserError::UnexpectedToken { token: self.token_stream.current().clone() })
+        }
+    }
+
+    fn parse_lengths(&mut self) -> Result<Vec<Expression>, ParserError> {
+        let mut result = vec![self.parse_expression()?];
+        while self.eat(pred!(COMMA))?.is_some() {
+            result.push(self.parse_expression()?);
+        }
+        Ok(result)
+    }
+
+    fn parse_base_type(&mut self) -> Result<Option<QualifiedIdentifier>, ParserError> {
+        if self.eat(pred!(LPAREN))?.is_some() {
+            let element = self.parse_qualident()?;
+            self.eat(pred!(RPAREN))?;
+            Ok(Some(element))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn parse_field_lists(&mut self) -> Result<Vec<FieldList>, ParserError> {
+        let mut result = vec![];
+        while self.peek(pred!(END)).is_none() {
+            if !result.is_empty() {
+                self.expect(pred!(SEMICOLON))?;
+            }
+            result.push(self.parse_field_list()?);
+        }
+        Ok(result)
+    }
+
+    fn parse_field_list(&mut self) -> Result<FieldList, ParserError> {
+        let fields = self.parse_identdef_list()?;
+        self.expect(pred!(COLON))?;
+        let ty = self.parse_type()?;
+        Ok(FieldList{ fields, ty })
+    }
+
+    fn parse_formal_parameters(&mut self) -> Result<Option<FormalParameters>, ParserError> {
+        let start_span = self.expect(pred!(LPAREN))?.span;
+        let sections = self.parse_fp_sections()?;
+        let mut end_span = self.expect(pred!(RPAREN))?.span;
+        let return_type =
+            if self.eat(pred!(COLON))?.is_some() {
+                let qualident = self.parse_qualident()?;
+                end_span = qualident.span();
+                Some(qualident)
+            } else { None };
+
+        if sections.is_empty() && return_type.is_none() {
+            Ok (None)
+        } else {
+            let span = Span::new(start_span.start, end_span.end);
+            Ok(Some(FormalParameters { sections, return_type, span }))
+        }
+    }
+
+    fn parse_fp_sections(&mut self) -> Result<Vec<FPSection>, ParserError> {
+        let mut result = vec![];
+        while self.peek(pred!(RPAREN)).is_none() {
+            if !result.is_empty() { self.expect(pred!(SEMICOLON))?; }
+            result.push(self.parse_fp_section()?);
+        }
+        Ok(result)
+    }
+
+    fn parse_fp_section(&mut self) -> Result<FPSection, ParserError> {
+        let start_span = self.token_stream.current.span;
+        let by_ref = self.eat(pred!(VAR))?.is_some();
+        let names = self.parse_ident_list()?;
+        self.expect(pred!(COLON));
+        let ty = self.parse_formal_type()?;
+        let span = Span::new(start_span.start, ty.span.end);
+        Ok(FPSection{ names, by_ref, ty, span })
+    }
+
+    fn parse_formal_type(&mut self) -> Result<FormalType, ParserError> {
+        let start_span = self.token_stream.current.span;
+        let mut open_arrays = 0;
+        while self.eat(pred!(ARRAY))?.is_some() {
+            self.expect(pred!(OF))?;
+            open_arrays += 1;
+        }
+        let base = self.parse_qualident()?;
+        let span = Span::new(start_span.start, base.span().end);
+        Ok(FormalType{ open_arrays, base, span })
+    }
+
     fn parse_designator(&mut self) -> Result<Designator, ParserError> {
         let start = self.token_stream.current().span;
         let head = self.parse_qualident()?;
@@ -434,8 +580,41 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
+    fn parse_identdef_list(&mut self) -> Result<Vec<IdentifierDef>, ParserError> {
+        let mut result = vec![self.parse_identdef()?];
+        while self.eat(pred!(COMMA))?.is_some() {
+            result.push(self.parse_identdef()?);
+        }
+        Ok(result)
+    }
+
     fn parse_identdef(&mut self) -> Result<IdentifierDef, ParserError> {
-        Ok(IdentifierDef { ident: self.parse_ident()?, exported: false, span: self.token_stream.current().span })
+        let ident = self.parse_ident()?;
+        let star = self.eat(pred!(STAR))?;
+        if star.is_some() {
+            let star = star.unwrap();
+            let span = Span::new(ident.span.start, star.span.end);
+            Ok(IdentifierDef {
+                ident,
+                exported: true,
+                span,
+            })
+        } else {
+            let span = ident.span;
+            Ok(IdentifierDef {
+                ident,
+                exported: false,
+                span,
+            })
+        }
+    }
+
+    fn parse_ident_list(&mut self) -> Result<Vec<Identifier>, ParserError> {
+        let mut result = vec![self.parse_ident()?];
+        while self.eat(pred!(COMMA))?.is_some() {
+            result.push(self.parse_ident()?);
+        }
+        Ok(result)
     }
 
     fn parse_ident(&mut self) -> Result<Identifier, ParserError> {
@@ -1050,6 +1229,197 @@ mod tests {
             let Expression::Binary { op: BinaryOperation::Is, lhs, rhs,  .. } = value else { panic!("Multiplication"); };
             let Expression::Int { value: 1,  .. } = &**lhs else { panic!("1"); };
             let Expression::Int { value: 2,  .. } = &**rhs else { panic!("2"); };
+        }
+    }
+
+    mod declarations {
+        use super::*;
+        use crate::frontend::ast::ConstDeclaration;
+        #[test]
+        fn parse_const_declaration() {
+            let module = parse("MODULE m; CONST foo=1987; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { ident, .. } = &decls.const_declarations[0];
+            assert_eq!(ident.ident.text, "foo");
+        }
+
+        #[test]
+        fn parse_const_declarations() {
+            let module = parse("MODULE m; CONST foo=1987; bar=24; END m .");
+            let decls = module.declarations;
+            let ConstDeclaration { ident, .. } = &decls.const_declarations[0];
+            assert_eq!(ident.ident.text, "foo");
+            let ConstDeclaration { ident, .. } = &decls.const_declarations[1];
+            assert_eq!(ident.ident.text, "bar");
+        }
+    }
+
+    mod types {
+        use crate::frontend::ast::{Expression, FPSection, FieldList, FormalType, IdentifierDef, Type, TypeDeclaration};
+        use crate::frontend::parser::tests::parse;
+
+        #[test]
+        fn parse_named_type() {
+            let module = parse("MODULE m; TYPE foo=bar; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Named { name } = ty else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "bar");
+        }
+
+        #[test]
+        fn parse_single_dimension_array_type() {
+            let module = parse("MODULE m; TYPE foo=ARRAY 2 OF bar; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Array { lengths, element, .. } = ty else { panic!("Array type"); };
+            assert_eq!(lengths.len(), 1);
+            let Expression::Int { value: 2, .. } = &lengths[0] else { panic!("Array Length"); };
+            let Type::Named { name } = &**element else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "bar");
+        }
+
+        #[test]
+        fn parse_multiple_dimensions_array_type() {
+            let module = parse("MODULE m; TYPE foo=ARRAY 2, 5 OF bar; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Array { lengths, element, .. } = ty else { panic!("Array type"); };
+            assert_eq!(lengths.len(), 2);
+            let Expression::Int { value: 2, .. } = &lengths[0] else { panic!("Array Length"); };
+            let Expression::Int { value: 5, .. } = &lengths[1] else { panic!("Array Length"); };
+            let Type::Named { name } = &**element else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "bar");
+        }
+
+        #[test]
+        fn parse_simplest_record_type() {
+            let module = parse("MODULE m; TYPE foo=RECORD END; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Record { base, field_lists, .. } = ty else { panic!("Record type"); };
+            assert!(base.is_none());
+            assert!(field_lists.is_empty());
+        }
+
+        #[test]
+        fn parse_single_field_list_record_type() {
+            let module = parse("MODULE m; TYPE foo=RECORD bar*: baz END; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Record { base, field_lists, .. } = ty else { panic!("Record type"); };
+            assert!(base.is_none());
+            assert_eq!(field_lists.len(), 1);
+            let FieldList { fields, ty, .. } = &field_lists[0];
+            assert_eq!(fields.len(), 1);
+            let IdentifierDef { ident, exported: true, .. } = &fields[0] else { panic!("Field"); };
+            assert_eq!(ident.text, "bar");
+            let Type::Named { name } = ty else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "baz");
+        }
+
+        #[test]
+        fn parse_multi_field_lists_record_type() {
+            let module = parse("MODULE m; TYPE foo=RECORD bar*: baz; fez, guz: hez END; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Record { base, field_lists, .. } = ty else { panic!("Record type"); };
+            assert!(base.is_none());
+            assert_eq!(field_lists.len(), 2);
+            let FieldList { fields, ty, .. } = &field_lists[0];
+            assert_eq!(fields.len(), 1);
+            let IdentifierDef { ident, exported: true, .. } = &fields[0] else { panic!("Field"); };
+            assert_eq!(ident.text, "bar");
+            let Type::Named { name } = ty else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "baz");
+            let FieldList { fields, ty, .. } = &field_lists[1];
+            assert_eq!(fields.len(), 2);
+            let IdentifierDef { ident, exported: false, .. } = &fields[0] else { panic!("Field"); };
+            assert_eq!(ident.text, "fez");
+            let IdentifierDef { ident, exported: false, .. } = &fields[1] else { panic!("Field"); };
+            assert_eq!(ident.text, "guz");
+            let Type::Named { name } = ty else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "hez");
+        }
+
+        #[test]
+        fn parse_pointer_type() {
+            let module = parse("MODULE m; TYPE foo=POINTER TO bar; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Pointer { pointee, .. } = ty else { panic!("Pointer type"); };
+            let Type::Named { name, .. } = &**pointee else { panic!("Named type"); };
+            assert_eq!(name.parts.len(), 1);
+            assert_eq!(name.parts[0].text, "bar");
+        }
+
+        #[test]
+        fn parse_simplest_procedure_type() {
+            let module = parse("MODULE m; TYPE foo=PROCEDURE(); END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Procedure { params: None, .. } = ty else { panic!("Procedure type"); };
+
+        }
+
+        #[test]
+        fn parse_simple_procedure_with_return_type() {
+            let module = parse("MODULE m; TYPE foo=PROCEDURE(): baz; END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Procedure { params: Some(params), .. } = ty else { panic!("Procedure type"); };
+
+            assert_eq!(params.sections.len(), 0);
+            assert!(params.return_type.is_some());
+            let return_type = params.return_type.clone().unwrap();
+            assert_eq!(return_type.parts.len(), 1);
+            assert_eq!(return_type.parts[0].text, "baz");
+        }
+
+        #[test]
+        fn parse_simpel_formal_parameter_procedure_type() {
+            let module = parse("MODULE m; TYPE foo=PROCEDURE(bar: baz); END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Procedure { params: Some(params), .. } = ty else { panic!("Procedure type"); };
+
+            assert_eq!(params.sections.len(), 1);
+            let FPSection { by_ref: false, names, ty, .. } = &params.sections[0] else { panic!("FPSection"); };
+            assert_eq!(names.len(), 1);
+            assert_eq!(names[0].text, "bar");
+            let FormalType { open_arrays: 0, base, .. } = ty else { panic!("FormalType"); };
+            assert_eq!(base.parts.len(), 1);
+            assert_eq!(base.parts[0].text, "baz");
+        }
+
+        #[test]
+        fn parse_multi_parameter_formal_parameter_procedure_type() {
+            let module = parse("MODULE m; TYPE foo=PROCEDURE(bar: ARRAY OF ARRAY OF baz; VAR fez, cuz: hez); END m .");
+            let decls = module.declarations;
+            let TypeDeclaration { ty, .. } = &decls.type_declarations[0];
+            let Type::Procedure { params: Some(params), .. } = ty else { panic!("Procedure type"); };
+
+            assert_eq!(params.sections.len(), 2);
+            let FPSection { by_ref: false, names, ty, .. } = &params.sections[0] else { panic!("FPSection"); };
+            assert_eq!(names.len(), 1);
+            assert_eq!(names[0].text, "bar");
+            let FormalType { open_arrays: 2, base, .. } = ty else { panic!("Named type"); };
+            assert_eq!(base.parts.len(), 1);
+            assert_eq!(base.parts[0].text, "baz");
+
+            let FPSection { by_ref: true, names, ty, .. } = &params.sections[1] else { panic!("FPSection"); };
+            assert_eq!(names.len(), 2);
+            assert_eq!(names[0].text, "fez");
+            assert_eq!(names[1].text, "cuz");
+            let FormalType { open_arrays: 0, base, .. } = ty else { panic!("Named type"); };
+            assert_eq!(base.parts.len(), 1);
+            assert_eq!(base.parts[0].text, "hez");
         }
     }
 }
