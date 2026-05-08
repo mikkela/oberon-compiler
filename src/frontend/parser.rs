@@ -1,4 +1,4 @@
-use crate::frontend::ast::{BinaryOperation, Case, ConstDeclaration, Declarations, Designator, Element, ElsIf, Expression, FPSection, FieldList, FormalParameters, FormalType, Identifier, IdentifierDef, Label, LabelValue, Module, ProcedureBody, ProcedureDeclaration, ProcedureHeader, QualifiedIdentifier, Selector, Statement, StatementSequence, Type, TypeDeclaration, UnaryOperation, VarDeclaration};
+use crate::frontend::ast::{BinaryOperation, Case, ConstDeclaration, Declarations, Designator, Element, ElsIf, Expression, FPSection, FieldList, FormalParameters, FormalType, Identifier, IdentifierDef, Import, Label, LabelValue, Module, ProcedureBody, ProcedureDeclaration, ProcedureHeader, QualifiedIdentifier, Selector, Statement, StatementSequence, Type, TypeDeclaration, UnaryOperation, VarDeclaration};
 use crate::frontend::lexer::{Lexer, LexerError};
 use crate::frontend::span::{Span, Spanned};
 use crate::frontend::token::{Token, TokenKind};
@@ -101,6 +101,7 @@ macro_rules! pred {
     (GREATEREQUAL) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == ">=" };
     (IDENT) => { |token: &Token| token.kind == TokenKind::Identifier };
     (IF) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "IF" };
+    (IMPORT) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "IMPORT" };
     (IN) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "IN" };
     (IS) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "IS" };
     (LBRACKET) => { |token: &Token| token.kind == TokenKind::OperatorOrDelimiter && token.lexeme == "[" };
@@ -148,8 +149,9 @@ impl<'a> Parser<'a> {
 
     fn parse_module(&mut self)-> Result<Module, ParserError> {
         let start = self.expect(pred!(MODULE))?.span;
-        let module_name = self.parse_ident()?;
+        let name = self.parse_ident()?;
         self.expect(pred!(SEMICOLON))?;
+        let imports = self.parse_imports()?;
         let declarations = self.parse_declarations()?;
         let stmts = self.parse_statement_sequence_with_begin(pred!(END))?;
         self.expect(pred!(END))?;
@@ -157,7 +159,8 @@ impl<'a> Parser<'a> {
         let end = self.expect(pred!(DOT))?.span;
 
         Ok(Module {
-            name: module_name,
+            name,
+            imports,
             declarations,
             stmts,
             end_name,
@@ -165,18 +168,32 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_statement_sequence_with_begin<F>(&mut self, end_predicate: F) -> Result<Option<StatementSequence>, ParserError>
-    where
-        F: Fn(&Token) -> bool,
-    {
-        if let Some(begin) = self.eat(pred!(BEGIN))? {
-            let block = self.parse_statement_sequence(end_predicate)?;
-            let span = Span::new(begin.span.start, block.span.end);
-            Ok(Some(StatementSequence { statements: block.statements, span }))
-        } else {
-            Ok(None)
+    fn parse_imports(&mut self) -> Result<Vec<Import>, ParserError> {
+        let Some(_) = self.eat(pred!(IMPORT))? else {
+            return Ok(vec![]);
+        };
+        let mut result = vec![self.parse_import()?];
+        while self.eat(pred!(COMMA))?.is_some() {
+            result.push(self.parse_import()?);
         }
+        self.expect(pred!(SEMICOLON))?;
+        Ok(result)
     }
+
+    fn parse_import(&mut self) -> Result<Import, ParserError> {
+        let module = self.parse_ident()?;
+        let start = module.span.start;
+        let mut end = module.span.end;
+        let alias = if self.eat(pred!(ASSIGN))?.is_some() {
+            let alias = self.parse_ident()?;
+            end = alias.span.end;
+            Some(alias)
+        } else {
+            None
+        };
+        Ok(Import { module, alias, span: Span::new(start, end) })
+    }
+
     fn parse_declarations(&mut self) -> Result<Declarations, ParserError> {
         let mut const_declarations = vec![];
         if self.eat(pred!(CONST))?.is_some() {
@@ -584,7 +601,7 @@ impl<'a> Parser<'a> {
         let start_span = self.token_stream.current.span;
         let by_ref = self.eat(pred!(VAR))?.is_some();
         let names = self.parse_ident_list()?;
-        self.expect(pred!(COLON));
+        self.expect(pred!(COLON))?;
         let ty = self.parse_formal_type()?;
         let span = Span::new(start_span.start, ty.span.end);
         Ok(FPSection{ names, by_ref, ty, span })
@@ -600,6 +617,19 @@ impl<'a> Parser<'a> {
         let base = self.parse_qualident()?;
         let span = Span::new(start_span.start, base.span().end);
         Ok(FormalType{ open_arrays, base, span })
+    }
+
+    fn parse_statement_sequence_with_begin<F>(&mut self, end_predicate: F) -> Result<Option<StatementSequence>, ParserError>
+    where
+        F: Fn(&Token) -> bool,
+    {
+        if let Some(begin) = self.eat(pred!(BEGIN))? {
+            let block = self.parse_statement_sequence(end_predicate)?;
+            let span = Span::new(begin.span.start, block.span.end);
+            Ok(Some(StatementSequence { statements: block.statements, span }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_statement_sequence<F>(&mut self, end_predicate: F) -> Result<StatementSequence, ParserError>
@@ -690,7 +720,6 @@ impl<'a> Parser<'a> {
             };
             self.expect(pred!(DO))?;
             let stmts = self.parse_statement_sequence(pred!(END))?;
-            let end = self.expect(pred!(END))?;
             let span = Span::new(start.span.start, stmts.span().end);
             Ok(Statement::For { var, low, high, by, stmts, span })
         }
@@ -752,11 +781,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_label(&mut self) -> Result<Label, ParserError> {
-        let start = self.token_stream.current().span;
         let value = self.parse_label_value()?;
         if self.eat(pred!(DOTDOT))?.is_some() {
             let value2 = self.parse_label_value()?;
-            let end = value2.span();
             Ok(Label::Range { low: value, high: value2 })
         } else {
             Ok(Label::Single { value })
@@ -764,19 +791,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_label_value(&mut self) -> Result<LabelValue, ParserError> {
-        if let Some(token) = self.peek(pred!(NUMBER)) {
+        if self.peek(pred!(NUMBER)).is_some() {
             let v = self.parse_number()?;
             let Expression::Int {value, span } = v else {
                 return Err(ParserError::InvalidLabelValue { token: self.token_stream.current().clone() })?
             };
             Ok(LabelValue::Integer { value, span })
-        } else if let Some(token) =self.peek(pred!(STRING)) {
+        } else if self.peek(pred!(STRING)).is_some() {
             let v = self.parse_string()?;
             let Expression::String { value, span } = v else {
                 return Err(ParserError::InvalidLabelValue { token: self.token_stream.current().clone() })?
             };
             Ok(LabelValue::String { value, span })
-        } else if let Some(token) = self.peek(pred!(IDENT)) {
+        } else if self.peek(pred!(IDENT)) .is_some(){
             let v = self.parse_qualident()?;
             Ok(LabelValue::QualifiedIdentifier(v))
         } else {
@@ -1760,7 +1787,7 @@ mod tests {
     }
 
     mod vars {
-        use crate::frontend::ast::{ConstDeclaration, Expression, IdentifierDef, Type, TypeDeclaration, VarDeclaration};
+        use crate::frontend::ast::{Type, VarDeclaration};
         use crate::frontend::parser::tests::parse;
 
         #[test]
@@ -1791,7 +1818,7 @@ mod tests {
     }
 
     mod statements {
-        use crate::frontend::ast::{Designator, Expression, Label, LabelValue, QualifiedIdentifier, Statement, Type, VarDeclaration};
+        use crate::frontend::ast::{Designator, Expression, Label, LabelValue, QualifiedIdentifier, Statement};
         use crate::frontend::parser::tests::parse;
 
         #[test]
@@ -1799,9 +1826,9 @@ mod tests {
             let module = parse("MODULE m; BEGIN foo := bar END m .");
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
-            let Statement::Assign { target, value, .. } = &stmts.statements[0] else { panic!("Expected assignment statement"); };
-            let Designator { head, .. } = target else { panic!("Target"); };
-            let QualifiedIdentifier { parts, .. } = head else { panic!("Qualified Identifier"); };
+            let Statement::Assign { target, .. } = &stmts.statements[0] else { panic!("Expected assignment statement"); };
+            let Designator { head, .. } = target;
+            let QualifiedIdentifier { parts, .. } = head;
             assert_eq!(parts.len(), 1);
             assert_eq!(parts[0].text, "foo");
         }
@@ -1812,8 +1839,8 @@ mod tests {
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
             let Statement::Call { callee, parameters, .. } = &stmts.statements[0] else { panic!("Expected call statement"); };
-            let Designator { head, .. } = callee else { panic!("Callee"); };
-            let QualifiedIdentifier { parts, .. } = head else { panic!("Qualified Identifier"); };
+            let Designator { head, .. } = callee;
+            let QualifiedIdentifier { parts, .. } = head;
             assert_eq!(parts.len(), 1);
             assert_eq!(parts[0].text, "foo");
             assert!(parameters.is_some());
@@ -1827,8 +1854,8 @@ mod tests {
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
             let Statement::Call { callee, parameters, .. } = &stmts.statements[0] else { panic!("Expected call statement"); };
-            let Designator { head, .. } = callee else { panic!("Callee"); };
-            let QualifiedIdentifier { parts, .. } = head else { panic!("Qualified Identifier"); };
+            let Designator { head, .. } = callee;
+            let QualifiedIdentifier { parts, .. } = head;
             assert_eq!(parts.len(), 1);
             assert_eq!(parts[0].text, "foo");
             assert!(parameters.is_some());
@@ -1844,8 +1871,8 @@ mod tests {
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
             let Statement::Call { callee, parameters, .. } = &stmts.statements[0] else { panic!("Expected call statement"); };
-            let Designator { head, .. } = callee else { panic!("Callee"); };
-            let QualifiedIdentifier { parts, .. } = head else { panic!("Qualified Identifier"); };
+            let Designator { head, .. } = callee;
+            let QualifiedIdentifier { parts, .. } = head;
             assert_eq!(parts.len(), 1);
             assert_eq!(parts[0].text, "foo");
             assert!(parameters.is_none());
@@ -1866,7 +1893,7 @@ mod tests {
             let module = parse("MODULE m; BEGIN IF TRUE THEN foo :=1 ELSE foo := 2 END END m .");
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
-            let Statement::If  { cond, stmts, else_branch, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
+            let Statement::If  { else_branch, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
             let Some(else_branch) = else_branch else { panic!("Expected else branch"); };
             assert_eq!(else_branch.statements.len(), 1);
         }
@@ -1876,7 +1903,7 @@ mod tests {
             let module = parse("MODULE m; BEGIN IF TRUE THEN foo :=1 ELSIF FALSE THEN foo := 2 END END m .");
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
-            let Statement::If  { cond, stmts, elsif_branches, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
+            let Statement::If  { elsif_branches, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
             assert_eq!(elsif_branches.len(), 1);
             let Expression::False { .. } = &elsif_branches[0].cond else { panic!("Condition must be false"); };
             assert_eq!(elsif_branches[0].stmts.statements.len(), 1);
@@ -1887,7 +1914,7 @@ mod tests {
             let module = parse("MODULE m; BEGIN IF TRUE THEN foo :=1 ELSIF FALSE THEN foo := 2 ELSIF FALSE THEN foo := 3; bar(5) END END m .");
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
-            let Statement::If  { cond, stmts, elsif_branches, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
+            let Statement::If  { elsif_branches, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
             assert_eq!(elsif_branches.len(), 2);
             let Expression::False { .. } = &elsif_branches[1].cond else { panic!("Condition must be false"); };
             assert_eq!(elsif_branches[1].stmts.statements.len(), 2);
@@ -1898,7 +1925,7 @@ mod tests {
             let module = parse("MODULE m; BEGIN IF TRUE THEN foo :=1 ELSIF FALSE THEN foo := 2 ELSE bar := 5 END END m .");
             assert!(module.stmts.is_some());
             let stmts = module.stmts.unwrap();
-            let Statement::If  { cond, stmts, elsif_branches, else_branch, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
+            let Statement::If  { elsif_branches, else_branch, .. } = &stmts.statements[0] else { panic!("Expected if statement"); };
             assert_eq!(elsif_branches.len(), 1);
             let Expression::False { .. } = &elsif_branches[0].cond else { panic!("Condition must be false"); };
             assert_eq!(elsif_branches[0].stmts.statements.len(), 1);
@@ -2097,7 +2124,6 @@ mod tests {
             assert_eq!(decls.procedure_declarations.len(), 1);
             let procedure = &decls.procedure_declarations[0];
             let header = &procedure.header;
-            let body = &procedure.body;
 
             let Some(ref parameters) = header.params else { panic!("Expected parameters"); };
             assert_eq!(parameters.sections.len(), 0);
@@ -2113,7 +2139,6 @@ mod tests {
             assert_eq!(decls.procedure_declarations.len(), 1);
             let procedure = &decls.procedure_declarations[0];
             let header = &procedure.header;
-            let body = &procedure.body;
 
             let Some(ref parameters) = header.params else { panic!("Expected parameters"); };
             assert_eq!(parameters.sections.len(), 0);
@@ -2127,7 +2152,6 @@ mod tests {
             assert_eq!(decls.procedure_declarations.len(), 1);
             let procedure = &decls.procedure_declarations[0];
             let header = &procedure.header;
-            let body = &procedure.body;
 
             assert_eq!(header.params.is_none(), true);
         }
@@ -2139,7 +2163,6 @@ mod tests {
             let decls = module.declarations;
             assert_eq!(decls.procedure_declarations.len(), 1);
             let procedure = &decls.procedure_declarations[0];
-            let header = &procedure.header;
             let body = &procedure.body;
 
             assert_eq!(body.stmts.is_none(), true);
@@ -2152,7 +2175,6 @@ mod tests {
             let decls = module.declarations;
             assert_eq!(decls.procedure_declarations.len(), 1);
             let procedure = &decls.procedure_declarations[0];
-            let header = &procedure.header;
             let body = &procedure.body;
 
             assert!(body.ret.is_none());
@@ -2165,7 +2187,6 @@ mod tests {
             let decls = module.declarations;
             assert_eq!(decls.procedure_declarations.len(), 1);
             let procedure = &decls.procedure_declarations[0];
-            let header = &procedure.header;
             let body = &procedure.body;
 
             assert!(body.ret.is_none());
@@ -2173,16 +2194,54 @@ mod tests {
     }
 
     mod module {
-        use crate::frontend::ast::{Expression, Statement};
         use crate::frontend::parser::tests::parse;
 
-        /*#[test]
+        #[test]
+        fn parse_imports() {
+            let module = parse("MODULE m; IMPORT m1, m2; END m .");
+            assert_eq!(module.imports.len(), 2);
+            assert_eq!(module.imports[0].module.text, "m1");
+            assert_eq!(module.imports[1].module.text, "m2");
+        }
+
+        #[test]
+        fn parse_imports_with_alias() {
+            let module = parse("MODULE m; IMPORT m1 := m3, m2, m4 := m6; END m .");
+            assert_eq!(module.imports.len(), 3);
+            assert_eq!(module.imports[0].module.text, "m1");
+            let Some(alias) = &module.imports[0].alias else { panic!("Expected alias"); };
+            assert_eq!(alias.text, "m3");
+            assert_eq!(module.imports[1].module.text, "m2");
+            assert_eq!(module.imports[2].module.text, "m4");
+            let Some(alias) = &module.imports[2].alias else { panic!("Expected alias"); };
+            assert_eq!(alias.text, "m6");
+        }
+
+        #[test]
         fn parse_module() {
-            let module = parse("MODULE m1; BEGIN FOR i := 1 TO 10 BY 2 DO foo := 2 END END m2 .");
-            assert!(module.stmts.is_some());
-            let stmts = module.stmts.unwrap();
-            let Statement::For { by, .. } = &stmts.statements[0] else { panic!("Expected for statement"); };
-            let Expression::Int { value: 2, .. } = by.as_ref().unwrap() else { panic!("By"); };
-        }*/
+            let module = parse("MODULE m1; IMPORT m1 := m3, m2; CONST N = 100; TYPE TABLE = ARRAY N OF REAL; VAR x, y: REAL; PROCEDURE add(i, j: REAL): REAL; RETURN i+j END add; BEGIN foo := 0; FOR i := 1 TO N BY 2 DO foo := add(foo, i) END m2 .");
+            assert_eq!(module.name.text, "m1");
+            assert_eq!(module.end_name.text, "m2");
+            assert_eq!(module.imports.len(), 2);
+            assert_eq!(module.declarations.const_declarations.len(), 1);
+            assert_eq!(module.declarations.type_declarations.len(), 1);
+            assert_eq!(module.declarations.var_declarations.len(), 1);
+            assert_eq!(module.declarations.procedure_declarations.len(), 1);
+            let Some(statements) = &module.stmts else { panic!("Expected statements"); };
+            assert_eq!(statements.statements.len(), 2);
+        }
+
+        #[test]
+        fn parse_smallest_module() {
+            let module = parse("MODULE m; END m .");
+            assert_eq!(module.name.text, "m");
+            assert!(module.stmts.is_none());
+            assert_eq!(module.declarations.const_declarations.len(), 0);
+            assert_eq!(module.declarations.type_declarations.len(), 0);
+            assert_eq!(module.declarations.var_declarations.len(), 0);
+            assert_eq!(module.declarations.procedure_declarations.len(), 0);
+            assert_eq!(module.imports.len(), 0);
+            assert_eq!(module.end_name.text, "m");
+        }
     }
 }

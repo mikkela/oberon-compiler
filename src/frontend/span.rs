@@ -13,10 +13,6 @@ impl Position {
             column: 1,
         }
     }
-
-    pub fn new(offset: usize, line: usize, column: usize) -> Self {
-        Self { offset, line, column }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

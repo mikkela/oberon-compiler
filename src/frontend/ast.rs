@@ -6,9 +6,24 @@ use crate::frontend::span::{Span, Spanned};
 pub struct Module {
     pub name: Identifier,
     pub end_name: Identifier,
+    pub imports: Vec<Import>,
     pub declarations: Declarations,
     pub stmts: Option<StatementSequence>,
     pub span: Span,
+}
+
+impl Spanned for Module {
+    fn span(&self) -> Span { self.span }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Import {
+    pub module: Identifier,
+    pub alias: Option<Identifier>,
+    pub span: Span,
+}
+
+impl Spanned for Import {
+    fn span(&self) -> Span { self.span }
 }
 
 // --------------------------- DECLARATIONS ---------------------------
