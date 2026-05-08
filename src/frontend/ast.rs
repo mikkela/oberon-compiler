@@ -1,3 +1,4 @@
+use crate::frontend::span;
 use crate::frontend::span::{Span, Spanned};
 
 // --------------------------- MODULES ---------------------------
@@ -6,7 +7,7 @@ pub struct Module {
     pub name: Identifier,
     pub end_name: Identifier,
     pub declarations: Declarations,
-    pub stmts: StatementSequence,
+    pub stmts: Option<StatementSequence>,
     pub span: Span,
 }
 
@@ -15,6 +16,8 @@ pub struct Module {
 pub struct Declarations {
     pub const_declarations: Vec<ConstDeclaration>,
     pub type_declarations: Vec<TypeDeclaration>,
+    pub var_declarations: Vec<VarDeclaration>,
+    pub procedure_declarations: Vec<ProcedureDeclaration>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +44,32 @@ impl Spanned for TypeDeclaration {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct VarDeclaration {
+    pub variables: Vec<IdentifierDef>,
+    pub ty: Type,
+}
+
+impl Spanned for VarDeclaration {
+    fn span(&self) -> Span {
+        Span::new(self.variables.first().unwrap().span.start, self.ty.span().end)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcedureDeclaration {
+    pub header: ProcedureHeader,
+    pub body: ProcedureBody,
+    pub name: Identifier,
+    pub span: Span,
+}
+
+impl Spanned for ProcedureDeclaration {
+    fn span(&self) -> Span {
+        Span::new(self.header.span.start, self.name.span.end)
+    }
+}
+
 // --------------------------- EXPRESSIONS ---------------------------
 #[derive(Clone, Debug, PartialEq)]
 pub struct Element {
@@ -49,7 +78,7 @@ pub struct Element {
     pub span: Span,
 }
 impl Spanned for Element {
-    fn span(&self) -> Span { self.span }
+    fn span(&self) -> span::Span { self.span }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,12 +188,78 @@ impl Spanned for FormalType { fn span(&self) -> Span { self.span } }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Statement {
     Assign { target: Designator, value: Expression, span: Span },
+    Call   { callee: Designator, parameters: Option<Vec<Expression>>, span: Span },
+    If     { cond: Expression, stmts: StatementSequence, elsif_branches: Vec<ElsIf>, else_branch: Option<StatementSequence>, span: Span },
+    Case  { expr: Expression, branches: Vec<Case>, span: Span },
+    While  { cond: Expression, stmts: StatementSequence, elsif_branches: Vec<ElsIf>, span: Span },
+    Repeat { stmts: StatementSequence, cond: Expression, span: Span },
+    For    { var: Identifier, low: Expression, high: Expression, by: Option<Expression>, stmts: StatementSequence, span: Span },
 }
 
 impl Spanned for Statement {
     fn span(&self) -> Span {
         match self {
             Statement::Assign { span, .. } => *span,
+            Statement::Call   { span, .. } => *span,
+            Statement::If     { span, .. } => *span,
+            Statement::Case   { span, .. } => *span,
+            Statement::While  { span, .. } => *span,
+            Statement::Repeat { span, .. } => *span,
+            Statement::For    { span, .. } => *span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ElsIf {
+    pub cond: Expression,
+    pub stmts: StatementSequence,
+    pub span: Span,
+}
+
+impl Spanned for ElsIf {
+    fn span(&self) -> Span { self.span }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Case {
+    pub label_list: Vec<Label>,
+    pub statements: StatementSequence,
+    pub span: Span,
+}
+
+impl Spanned for Case {
+    fn span(&self) -> Span { self.span }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Label {
+    Single{ value: LabelValue },
+    Range{ low: LabelValue, high: LabelValue},
+}
+
+impl Spanned for Label {
+    fn span(&self) -> Span {
+        match self {
+            Label::Single { value, .. } => value.span(),
+            Label::Range   { low, high, .. } => Span::new(low.span().start, high.span().end)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LabelValue {
+    Integer { value: i64, span: Span },
+    String { value: String, span: Span },
+    QualifiedIdentifier (QualifiedIdentifier),
+}
+
+impl Spanned for LabelValue {
+    fn span(&self) -> Span {
+        match self {
+            LabelValue::Integer { span, .. } => *span,
+            LabelValue::String   { span, .. } => *span,
+            LabelValue::QualifiedIdentifier ( ident, .. ) => ident.span()
         }
     }
 }
@@ -178,6 +273,25 @@ pub struct StatementSequence {
 impl Spanned for StatementSequence {
     fn span(&self) -> Span { self.span }
 }
+
+// --------------------------- PROCEDURE ---------------------------
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcedureHeader {
+    pub name: IdentifierDef,
+    pub params: Option<FormalParameters>,
+    pub span: Span,
+}
+impl Spanned for ProcedureHeader { fn span(&self) -> Span { self.span } }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcedureBody {
+    pub declarations: Declarations,
+    pub stmts: Option<StatementSequence>,
+    pub ret: Option<Expression>,
+    pub span: Span,
+}
+
+impl Spanned for ProcedureBody { fn span(&self) -> Span { self.span } }
 
 // --------------------------- DESIGNATORS, SELECTORS, IDENTIFIERS ---------------------------
 #[derive(Clone, Debug, PartialEq)]
